@@ -1,0 +1,12 @@
+# Alembic revisions live here.
+#
+# This directory is intentionally empty in the Phase 1 tree: the local SQLite
+# deployment creates its schema from the models at start-up
+# (`Base.metadata.create_all`). To introduce versioned schema changes (or to move
+# to PostgreSQL), generate the first revision from `backend/`:
+#
+#   uv run alembic revision --autogenerate -m "initial schema"
+#   uv run alembic upgrade head
+#
+# `alembic/env.py` takes the database URL from the application settings, so the
+# generated migration always targets the same database the app uses.

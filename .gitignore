@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# MolDock Studio runtime data (never commit user projects or generated artifacts).
+# Anchored to the repository root and to backend/ so the committed, redistributable
+# sample data under backend/app/data/ is never caught by these patterns.
+/data/
+/backend/data/
+!backend/app/data/
+
+# Local configuration
+.env
+.env.local
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+npm-debug.log*

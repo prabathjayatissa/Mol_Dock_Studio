@@ -1,0 +1,49 @@
+@import "tailwindcss";
+
+/* MolDock Studio uses a compact, dark, instrument-panel aesthetic. Tailwind v4
+   exposes theme tokens as CSS variables; these are the few app-specific ones. */
+@theme {
+  --color-surface-0: #0b0f14;
+  --color-surface-1: #121821;
+  --color-surface-2: #1a222d;
+  --color-surface-3: #232d3b;
+  --color-border-subtle: #2a3542;
+  --color-accent: #4fd1c5;
+  --color-accent-muted: #2c7a72;
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background-color: var(--color-surface-0);
+  color: #e6edf3;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+/* Thin scrollbars so dense panels stay readable. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-surface-3) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--color-surface-3);
+  border-radius: 999px;
+}
+
+/* Range inputs used for opacity/spacing controls. */
+input[type="range"] {
+  accent-color: var(--color-accent);
+}

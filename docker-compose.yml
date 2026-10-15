@@ -1,0 +1,39 @@
+# MolDock Studio — containerised stack
+#
+# Default (Apple Silicon friendly): linux/arm64 without AutoDock Vina.
+# Full docking stack:            MOLDOCK_PLATFORM=linux/amd64 MOLDOCK_INSTALL_VINA=1 docker compose up --build
+#
+# The frontend is not containerised in development: `npm run dev` gives a fast
+# hot-reload loop and talks to the container through the published port.
+
+services:
+  backend:
+    build:
+      context: ./backend
+      args:
+        INSTALL_VINA: ${MOLDOCK_INSTALL_VINA:-0}
+    platform: ${MOLDOCK_PLATFORM:-linux/arm64}
+    image: moldock-studio-backend:0.1.0
+    ports:
+      - "${MOLDOCK_BACKEND_PORT:-8000}:8000"
+    environment:
+      MOLDOCK_ENV: ${MOLDOCK_ENV:-development}
+      MOLDOCK_LOG_LEVEL: ${MOLDOCK_LOG_LEVEL:-INFO}
+      MOLDOCK_DATA_DIR: /data
+      MOLDOCK_DATABASE_URL: sqlite:////data/moldock.db
+      MOLDOCK_CORS_ORIGINS: ${MOLDOCK_CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      MOLDOCK_MAX_UPLOAD_MB: ${MOLDOCK_MAX_UPLOAD_MB:-200}
+      MOLDOCK_MAX_ATOMS: ${MOLDOCK_MAX_ATOMS:-500000}
+      MOLDOCK_JOB_TIMEOUT_SECONDS: ${MOLDOCK_JOB_TIMEOUT_SECONDS:-3600}
+      MOLDOCK_MAX_CONCURRENT_JOBS: ${MOLDOCK_MAX_CONCURRENT_JOBS:-2}
+      MOLDOCK_SCIENTIFIC_BACKEND_MODE: docker
+      MOLDOCK_VINA_BINARY: ${MOLDOCK_VINA_BINARY:-}
+      MOLDOCK_OBABEL_BINARY: ${MOLDOCK_OBABEL_BINARY:-}
+    volumes:
+      # Project store: imported structures, prepared files, jobs and reports.
+      - moldock-data:/data
+    restart: unless-stopped
+
+volumes:
+  moldock-data:
+    name: moldock-studio-data
