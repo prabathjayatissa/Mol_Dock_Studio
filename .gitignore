@@ -32,3 +32,9 @@ dist/
 .vscode/
 *.swp
 npm-debug.log*
+
+# Playwright artifacts
+test-results/
+playwright-report/
+blob-report/
+trace/

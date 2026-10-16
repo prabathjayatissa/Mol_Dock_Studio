@@ -66,7 +66,7 @@ served by `/api/health` and rendered in the app's *Workflow* panel.
 ### Native (fastest) — Python 3.12 + Node 20+
 
 ```bash
-git clone <your-fork> moldock-studio && cd moldock-studio
+git clone https://github.com/prabathjayatissa/Mol_Dock_Studio.git moldock-studio && cd moldock-studio
 cp .env.example .env
 
 # Backend: creates backend/.venv from the pinned uv.lock

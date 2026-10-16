@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (ruff + pytest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      # Keep the native numerics libraries single-threaded: the tests are
+      # small and reproducibility matters more than throughput here.
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      NUMEXPR_NUM_THREADS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install pinned dependencies
+        run: uv sync --extra dev --frozen
+      - name: Lint (ruff)
+        run: uv run ruff check app tests
+      - name: Tests (pytest)
+        # Network tests are opt-in (MOLDOCK_TEST_NETWORK=1) and therefore skipped.
+        run: uv run pytest
+
+  frontend:
+    name: Frontend (typecheck + vitest + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Type-check
+        run: npm run typecheck
+      - name: Unit tests
+        run: npm run test
+      - name: Production build
+        run: npm run build
