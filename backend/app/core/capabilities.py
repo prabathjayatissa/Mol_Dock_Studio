@@ -161,7 +161,7 @@ def detect_capabilities(settings: Settings | None = None) -> list[Capability]:
             "Meeko",
             "preparation",
             "meeko",
-            "Phase 2 needs Meeko for ligand/receptor PDBQT preparation: uv sync --extra docking.",
+            "Phase 2 needs Meeko for ligand/receptor PDBQT preparation: uv sync --extra prep.",
             distribution="meeko",
         ),
         _probe_module(

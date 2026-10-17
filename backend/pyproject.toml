@@ -25,9 +25,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Meeko (pure Python) is installable on macOS arm64 and covers Phase 2 PDBQT
+# ligand/receptor preparation. Keep it in its own extra so it does not pull in
+# AutoDock Vina, which ships manylinux x86_64 wheels only and is not
+# installable here; docking is reached through Docker or a native binary.
+prep = ["meeko>=0.6"]
+
 # AutoDock Vina ships manylinux x86_64 wheels only. On macOS arm64 these are
 # not installable; docking is reached through Docker or a native Vina binary.
-docking = ["meeko>=0.6", "vina>=1.2.7"]
+docking = ["vina>=1.2.7"]
 protein-prep = ["pdb2pqr>=3.6"]
 dev = ["pytest>=8.0", "pytest-cov>=6.0", "ruff>=0.6"]
 
