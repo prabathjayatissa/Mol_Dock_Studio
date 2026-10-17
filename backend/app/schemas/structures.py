@@ -40,6 +40,7 @@ class StructureOut(ORMModel):
     atomsCount: int
     residuesCount: int
     chainsCount: int
+    parentStructureId: str | None = None
     createdAt: dt.datetime
 
 

@@ -351,6 +351,7 @@ def structure_detail_payload(session: Session, structure_id: str) -> dict[str, A
         "atomsCount": record_row.atoms_count,
         "residuesCount": record_row.residues_count,
         "chainsCount": record_row.chains_count,
+        "parentStructureId": record_row.parent_structure_id,
         "createdAt": record_row.created_at,
         "warnings": record_row.warnings or [],
         "properties": record_row.properties or {},
