@@ -24,6 +24,9 @@ class ReceptorPrepRequest(BaseModel):
     keepChains: list[str] | None = Field(
         default=None, description="Chain ids to keep. None keeps every polymer chain."
     )
+    addHydrogens: bool = Field(
+        default=False, description="Add explicit hydrogens (needed for PDBQT/docking input)."
+    )
 
 
 class ReceptorPrepOut(ORMModel):
@@ -108,6 +111,43 @@ class BindingSiteOut(ORMModel):
     createdAt: datetime
 
 
+class PdbqtOut(BaseModel):
+    structureId: str
+    path: str
+    sha256: str
+    heavyAtoms: int
+    pdbqtAtoms: int
+
+
+class DockingPrepOut(BaseModel):
+    receptorPrepId: str
+    receptorOutputStructureId: str
+    receptorAtomsKept: int
+    receptorAtomsRemoved: int
+    ligandPrepId: str
+    ligandOutputStructureId: str
+    ligandConformers: int
+    receptorPdbqt: PdbqtOut
+    ligandPdbqt: PdbqtOut
+    bindingSite: dict[str, Any] | None = None
+
+
+class DockingPrepRequest(BaseModel):
+    receptorStructureId: str
+    ligandStructureId: str
+    bindingSiteId: str | None = None
+    receptorName: str | None = Field(default=None, max_length=200)
+    ligandName: str | None = Field(default=None, max_length=200)
+    keepWaters: bool = Field(default=False)
+    keepCofactors: bool = Field(default=False)
+    keepChains: list[str] | None = None
+    addHydrogens: bool = Field(default=True)
+    ligandEmbed3d: bool = Field(default=True)
+    ligandSeed: int = Field(default=42, ge=0)
+    ligandOptimize: bool = Field(default=True)
+    ligandMaxConformers: int = Field(default=1, ge=1, le=10)
+
+
 __all__ = [
     "ReceptorPrepRequest",
     "ReceptorPrepOut",
@@ -115,4 +155,7 @@ __all__ = [
     "LigandPrepOut",
     "BindingSiteRequest",
     "BindingSiteOut",
+    "PdbqtOut",
+    "DockingPrepRequest",
+    "DockingPrepOut",
 ]

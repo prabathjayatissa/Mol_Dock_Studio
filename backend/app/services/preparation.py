@@ -12,6 +12,7 @@ can be traced back to its inputs.
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -291,6 +292,7 @@ def prepare_receptor(
     keep_waters: bool = False,
     keep_cofactors: bool = False,
     keep_chains: list[str] | None = None,
+    add_hydrogens: bool = False,
     store: ArtifactStore | None = None,
 ) -> PreparedReceptor:
     """Prepare a receptor: keep selected polymer chains + opt-in waters/cofactors.
@@ -339,7 +341,56 @@ def prepare_receptor(
 
     filtered = _filter_to_residues(parsed, kept, removed_reason)
 
+    # Optionally add explicit hydrogens (needed for PDBQT/docking input).
+    add_hydrogens_warning: dict[str, Any] | None = None
+    if add_hydrogens:
+        try:
+            from rdkit import Chem, RDLogger
+            from rdkit.Chem import AllChem
+
+            RDLogger.DisableLog("rdApp.*")
+            mol = None
+            if parent.format in {"pdb", "mmcif"}:
+                mol = Chem.MolFromPDBFile(str(store.absolute(parent.file_path)), removeHs=False, sanitize=True)
+            elif parent.format in {"sdf", "mol"}:
+                mol = Chem.MolFromMolFile(str(store.absolute(parent.file_path)), removeHs=False, sanitize=True)
+            elif parent.format == "mol2":
+                mol = Chem.MolFromMol2File(str(store.absolute(parent.file_path)), removeHs=False, sanitize=True)
+            if mol is not None:
+                mol = Chem.AddHs(mol, addCoords=False)
+                # Rebuild coordinates: ETKDG is not needed; keep original heavy-atom
+                # coordinates and let RDKit place hydrogens geometrically.
+                AllChem.AssignStereochemistry(mol, cleanIt=False, force=True)
+                # Re-parse the PDB back into our ParsedStructure so the packet is
+                # consistent with the stored file.
+                from app.services.io.parsers import parse_structure_file
+
+                tmp_path = store.absolute(parent.file_path).with_suffix(".tmp.pdb")
+                tmp_path.write_text(Chem.MolToPDBBlock(mol), encoding="utf-8")
+                try:
+                    filtered = parse_structure_file(
+                        tmp_path,
+                        "pdb",
+                        name=filtered.name,
+                        source=parsed.source,
+                    )
+                finally:
+                    tmp_path.unlink(missing_ok=True)
+                add_hydrogens_warning = {
+                    "code": "receptor_hydrogens_added",
+                    "severity": "info",
+                    "message": f"Explicit hydrogens added ({mol.GetNumAtoms() - parent.atoms_count} new atoms).",
+                }
+        except Exception as exc:  # noqa: BLE001 - hydrogen addition is best-effort
+            add_hydrogens_warning = {
+                "code": "receptor_hydrogen_addition_failed",
+                "severity": "warning",
+                "message": f"Could not add hydrogens to receptor: {exc}. Proceeding without explicit hydrogens.",
+            }
+
     warnings = [w.as_dict() for w in parsed.warnings]
+    if add_hydrogens_warning:
+        warnings.append(add_hydrogens_warning)
     if removed_reason:
         warnings.append(
             {
@@ -371,6 +422,7 @@ def prepare_receptor(
             "keepWaters": keep_waters,
             "keepCofactors": keep_cofactors,
             "keepChains": keep_chains,
+            "addHydrogens": add_hydrogens,
             "atomsKept": filtered.atom_count,
             "atomsRemoved": parent.atoms_count - filtered.atom_count,
         },
@@ -386,6 +438,7 @@ def prepare_receptor(
             "keepWaters": keep_waters,
             "keepCofactors": keep_cofactors,
             "keepChains": keep_chains,
+            "addHydrogens": add_hydrogens,
             "atomsKept": filtered.atom_count,
             "atomsRemoved": parent.atoms_count - filtered.atom_count,
             "residuesKept": len(filtered.residues),
@@ -511,32 +564,57 @@ def prepare_ligand(
 
     mol = Chem.AddHs(mol, addCoords=False)
     conformers = 0
+    conf_ids: list[int] = []
     if embed_3d:
         params = AllChem.ETKDGv3()
         params.randomSeed = seed
-        if AllChem.EmbedMolecule(mol, params) != 0:
+        # Embed multiple conformers when requested; embed them all at once so
+        # they share the same random-seed bounds and are directly comparable.
+        conf_ids = list(
+            AllChem.EmbedMultipleConfs(
+                mol,
+                numConfs=max_conformers,
+                params=params,
+            )
+        )
+        if not conf_ids:
             raise StructureParseError(
-                "RDKit could not generate a 3D conformer for this molecule.",
+                "RDKit could not generate any 3D conformers for this molecule.",
                 detail={"structureId": structure_id, "smiles": ligand_row.smiles},
                 remediation="Check for unusual valences, or import a prepared 3D structure.",
             )
-        conformers = 1
+        conformers = len(conf_ids)
         if optimize:
-            try:
-                AllChem.MMFFOptimizeMolecule(mol, maxIters=500)
-            except Exception:  # noqa: BLE001 - MMFF not universal; ETKDG geometry still valid
-                messages.append(
-                    {
-                        "code": "mmff_optimization_failed",
-                        "severity": "warning",
-                        "message": "MMFF94 optimisation failed; the ETKDG conformer is used unoptimised.",
-                    }
-                )
+            for conf_id in conf_ids:
+                try:
+                    AllChem.MMFFOptimizeMolecule(mol, confId=conf_id, maxIters=500)
+                except Exception:  # noqa: BLE001 - MMFF not universal
+                    messages.append(
+                        {
+                            "code": "mmff_optimization_failed",
+                            "severity": "warning",
+                            "message": f"MMFF94 optimisation failed for conformer {conf_id}; unoptimised geometry retained.",
+                        }
+                    )
 
-    sdf_block = Chem.MolToMolBlock(mol)
+    # Write a multi-model SDF: one MODEL/ENDMDL block per conformer so docking
+    # and screening can iterate over the ensemble.
+    sdf_blocks: list[str] = []
+    if conformers:
+        for conf_id in conf_ids:
+            block = Chem.MolToMolBlock(mol, confId=conf_id)
+            # MolToMolBlock ends with $$$$; replace the terminator with ENDMDL
+            # so multiple models concatenate into a valid multi-model SDF.
+            block = block.rstrip()
+            if block.endswith("$$$$"):
+                block = block[: -len("$$$$")].rstrip()
+            sdf_blocks.append(f"{block}\nENDMDL")
+        sdf_content = "\n".join(sdf_blocks) + "\n$$$$\n"
+    else:
+        sdf_content = Chem.MolToMolBlock(mol)
     derived_name = (name or f"{parent.name} (prepared ligand)")[:200]
     written_name = f"{Path(derived_name).stem}.sdf"
-    content = sdf_block.encode("utf-8")
+    content = sdf_content.encode("utf-8")
     artifact = store.store_bytes(project_id, "prepared_ligands", written_name, content)
 
     summary = parsed.summary()
@@ -817,3 +895,283 @@ def define_binding_site(
     session.commit()
     session.refresh(site)
     return site
+
+
+# ---------------------------------------------------------------------------
+# PDBQT generation (Meeko) — Phase 2
+# ---------------------------------------------------------------------------
+
+def generate_pdbqt(
+    session: Session,
+    *,
+    project_id: str,
+    structure_id: str,
+    store: ArtifactStore | None = None,
+) -> dict[str, Any]:
+    """Convert a prepared structure to PDBQT using Meeko.
+
+    PDBQT is AutoDock Vina's input format: it adds partial charges (Gasteiger),
+    atom types, and merges hydrogens into the heavy-atom record. The source
+    structure should already be prepared (receptor: chains/cofactors selected,
+    hydrogens added; ligand: 3D conformer embedded).
+
+    Returns a dict with the PDBQT content, artefact path, and statistics.
+    """
+    settings = get_settings()
+    store = store or ArtifactStore(settings)
+    project = session.get(Project, project_id)
+    if project is None:
+        raise NotFoundError(f"Project '{project_id}' does not exist.")
+    parent = session.get(Structure, structure_id)
+    if parent is None:
+        raise NotFoundError(f"Structure '{structure_id}' does not exist.")
+
+    try:
+        from meeko import MoleculePreparation  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise ValidationFailure(
+            "Meeko is not installed. Run: uv sync --extra prep",
+            detail={"structureId": structure_id},
+            remediation="uv sync --extra prep",
+        ) from exc
+
+    from rdkit import Chem, RDLogger
+
+    RDLogger.DisableLog("rdApp.*")
+
+    source_path = store.absolute(parent.file_path)
+    mol: Any = None
+    if parent.format in {"pdb", "pdbqt"}:
+        mol = Chem.MolFromPDBFile(str(source_path), removeHs=False, sanitize=True)
+    elif parent.format in {"sdf", "mol"}:
+        mol = Chem.MolFromMolFile(str(source_path), removeHs=False, sanitize=True)
+    elif parent.format == "mol2":
+        mol = Chem.MolFromMol2File(str(source_path), removeHs=False, sanitize=True)
+    else:
+        raise ValidationFailure(
+            f"PDBQT generation from format '{parent.format}' is not supported.",
+            detail={"structureId": structure_id, "format": parent.format},
+            remediation="Convert the structure to PDB/SDF/MOL2 first.",
+        )
+
+    if mol is None:
+        raise StructureParseError(
+            f"RDKit could not parse '{parent.file_path}' as a molecule.",
+            detail={"structureId": structure_id},
+        )
+
+    # Ensure explicit hydrogens are present (Meeko needs them to merge).
+    mol = Chem.AddHs(mol, addCoords=False)
+
+    # Sanitize to fix potential valence issues from SDF/PDB re-parsing
+    # (e.g. metal-coordination bonds misread as covalent). Proceed with
+    # whatever RDKit can make consistent.
+    with contextlib.suppress(Exception):
+        Chem.SanitizeMol(mol, sanitizeOps=Chem.SanitizeFlags.SANITIZE_ALL)
+
+    # Meeko requires a single connected fragment. Keep the largest fragment
+    # (by heavy-atom count) so multi-fragment receptors/ligands can be prepared.
+    frags = Chem.GetMolFrags(mol, asMols=True, sanitizeFrags=True)
+    if len(frags) > 1:
+        frags = sorted(frags, key=lambda m: m.GetNumHeavyAtoms(), reverse=True)
+        mol = frags[0]
+
+    preparer = MoleculePreparation()
+    try:
+        setups = preparer.prepare(mol)
+    except Exception as exc:  # noqa: BLE001 - Meeko failures are reported honestly
+        raise StructureParseError(
+            f"Meeko could not prepare '{parent.file_path}': {exc}",
+            detail={"structureId": structure_id},
+            remediation="Check valences, formal charges, and that hydrogens were added.",
+        ) from exc
+
+    if not setups:
+        raise StructureParseError(
+            f"Meeko produced no setups for '{parent.file_path}'.",
+            detail={"structureId": structure_id},
+        )
+
+    setup = setups[0]
+    try:
+        from meeko.writer import PDBQTWriterLegacy
+
+        pdbqt_string, success, error_msg = PDBQTWriterLegacy.write_string(
+            setup, bad_charge_ok=True
+        )
+    except Exception as exc:  # noqa: BLE001 - Meeko failures are reported honestly
+        raise StructureParseError(
+            f"Meeko could not write PDBQT for '{parent.file_path}': {exc}",
+            detail={"structureId": structure_id},
+            remediation="Check valences, formal charges, and that hydrogens were added.",
+        ) from exc
+
+    if not success:
+        raise StructureParseError(
+            f"Meeko PDBQT generation failed for '{parent.file_path}': {error_msg}",
+            detail={"structureId": structure_id},
+            remediation="Check valences, formal charges, and that hydrogens were added.",
+        )
+
+    derived_name = f"{Path(parent.name).stem}.pdbqt"
+    artifact = store.store_bytes(project_id, "receptors", derived_name, pdbqt_string.encode("utf-8"))
+
+    # Count heavy atoms and PDBQT atoms for stats.
+    heavy_atoms = sum(1 for a in mol.GetAtoms() if a.GetAtomicNum() > 1)
+    pdbqt_atom_lines = [
+        line for line in pdbqt_string.splitlines()
+        if line.startswith(("ATOM", "HETATM"))
+    ]
+
+    record(
+        session,
+        action="generate_pdbqt",
+        entity_type="structure",
+        entity_id=parent.id,
+        project_id=project_id,
+        inputs={"structureId": structure_id, "format": parent.format},
+        outputs={"pdbqtPath": artifact.relative_path, "pdbqtAtoms": len(pdbqt_atom_lines)},
+        params={"sourceFormat": parent.format},
+    )
+    session.commit()
+
+    return {
+        "structureId": structure_id,
+        "pdbqtPath": artifact.relative_path,
+        "pdbqtSha256": artifact.sha256,
+        "heavyAtoms": heavy_atoms,
+        "pdbqtAtoms": len(pdbqt_atom_lines),
+        "content": pdbqt_string,
+    }
+
+
+def prepare_for_docking(
+    session: Session,
+    *,
+    project_id: str,
+    receptor_structure_id: str,
+    ligand_structure_id: str,
+    binding_site_id: str | None = None,
+    receptor_name: str | None = None,
+    ligand_name: str | None = None,
+    keep_waters: bool = False,
+    keep_cofactors: bool = False,
+    keep_chains: list[str] | None = None,
+    add_hydrogens: bool = True,
+    ligand_embed3d: bool = True,
+    ligand_seed: int = 42,
+    ligand_optimize: bool = True,
+    ligand_max_conformers: int = 1,
+    store: ArtifactStore | None = None,
+) -> dict[str, Any]:
+    """End-to-end Phase 2 preparation for docking.
+
+    Runs receptor preparation, ligand preparation, and (optionally) PDBQT
+    generation for both, returning every derived artefact so the frontend can
+    proceed to Phase 3 docking.
+
+    Returns a dict with receptorPrep, ligandPrep, receptorPdbqt, ligandPdbqt,
+    and bindingSite (if requested) results.
+    """
+    settings = get_settings()
+    store = store or ArtifactStore(settings)
+
+    # 1. Prepare the receptor.
+    receptor_outcome = prepare_receptor(
+        session,
+        project_id=project_id,
+        structure_id=receptor_structure_id,
+        name=receptor_name,
+        keep_waters=keep_waters,
+        keep_cofactors=keep_cofactors,
+        keep_chains=keep_chains,
+        add_hydrogens=add_hydrogens,
+        store=store,
+    )
+
+    # 2. Prepare the ligand.
+    ligand_outcome = prepare_ligand(
+        session,
+        project_id=project_id,
+        structure_id=ligand_structure_id,
+        name=ligand_name,
+        embed_3d=ligand_embed3d,
+        seed=ligand_seed,
+        optimize=ligand_optimize,
+        max_conformers=ligand_max_conformers,
+        store=store,
+    )
+
+    # 3. Generate PDBQT for both.
+    receptor_pdbqt = generate_pdbqt(
+        session,
+        project_id=project_id,
+        structure_id=receptor_outcome.record.id,
+        store=store,
+    )
+    ligand_pdbqt = generate_pdbqt(
+        session,
+        project_id=project_id,
+        structure_id=ligand_outcome.record.id,
+        store=store,
+    )
+
+    # 4. Optionally return the binding site.
+    binding_site = None
+    if binding_site_id:
+        site = session.get(BindingSite, binding_site_id)
+        if site is None:
+            raise NotFoundError(f"Binding site '{binding_site_id}' does not exist.")
+        binding_site = {
+            "id": site.id,
+            "name": site.name,
+            "method": site.method,
+            "centerX": site.center_x,
+            "centerY": site.center_y,
+            "centerZ": site.center_z,
+            "sizeX": site.size_x,
+            "sizeY": site.size_y,
+            "sizeZ": site.size_z,
+        }
+
+    return {
+        "receptorPrep": {
+            "id": receptor_outcome.receptor_prep.id,
+            "outputStructureId": receptor_outcome.record.id,
+            "atomsKept": receptor_outcome.atoms_kept,
+            "atomsRemoved": receptor_outcome.atoms_removed,
+            "residuesKept": receptor_outcome.residues_kept,
+            "warnings": receptor_outcome.warnings,
+        },
+        "ligandPrep": {
+            "id": ligand_outcome.ligand_prep.id,
+            "outputStructureId": ligand_outcome.record.id,
+            "conformers": ligand_outcome.conformers,
+            "warnings": ligand_outcome.warnings,
+        },
+        "receptorPdbqt": {
+            "path": receptor_pdbqt["pdbqtPath"],
+            "sha256": receptor_pdbqt["pdbqtSha256"],
+            "heavyAtoms": receptor_pdbqt["heavyAtoms"],
+            "pdbqtAtoms": receptor_pdbqt["pdbqtAtoms"],
+        },
+        "ligandPdbqt": {
+            "path": ligand_pdbqt["pdbqtPath"],
+            "sha256": ligand_pdbqt["pdbqtSha256"],
+            "heavyAtoms": ligand_pdbqt["heavyAtoms"],
+            "pdbqtAtoms": ligand_pdbqt["pdbqtAtoms"],
+        },
+        "bindingSite": binding_site,
+    }
+
+
+__all__ = [
+    "prepare_receptor",
+    "prepare_ligand",
+    "define_binding_site",
+    "generate_pdbqt",
+    "prepare_for_docking",
+    "PreparedReceptor",
+    "PreparedLigand",
+]
+

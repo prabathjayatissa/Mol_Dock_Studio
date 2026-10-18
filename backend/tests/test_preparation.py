@@ -288,3 +288,176 @@ def test_list_preparations_and_sites(client, project, sample_data: Path) -> None
         "/api/binding-sites", params={"projectId": project["id"]}
     )
     assert response.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Receptor prep with hydrogen addition
+# ---------------------------------------------------------------------------
+
+
+def test_prepare_receptor_with_hydrogens(
+    client, project, sample_data: Path
+) -> None:
+    body = _import(client, project["id"], sample_data / "3PTB.pdb", kind="complex")
+    structure_id = body["structure"]["id"]
+    original_atoms = body["structure"]["atomsCount"]
+
+    response = client.post(
+        f"/api/preparation/receptor/{structure_id}",
+        params={"keepWaters": False, "keepCofactors": False, "addHydrogens": True},
+    )
+    assert response.status_code == 201, response.text
+    prep = response.json()
+
+    assert prep["atomsKept"] > original_atoms  # hydrogens added
+    assert prep["status"] == "completed"
+
+    # Verify the derived structure has hydrogens.
+    derived = client.get(f"/api/structures/{prep['outputStructureId']}")
+    assert derived.status_code == 200
+    assert derived.json()["atomsCount"] > original_atoms
+
+
+# ---------------------------------------------------------------------------
+# Ligand prep with conformer ensembles
+# ---------------------------------------------------------------------------
+
+
+def test_prepare_ligand_multiple_conformers(
+    client, project, sample_data: Path
+) -> None:
+    # Import a ligand SDF (benzamidine), then prepare with multiple conformers.
+    body = _import(client, project["id"], sample_data / "benzamidine.sdf", kind="ligand")
+    ligand_structure_id = body["structure"]["id"]
+
+    response = client.post(
+        f"/api/preparation/ligand/{ligand_structure_id}",
+        params={"embed3d": True, "seed": 42, "optimize": True, "maxConformers": 3},
+    )
+    assert response.status_code == 201, response.text
+    prep = response.json()
+
+    assert prep["kind"] == "ligand"
+    assert prep["conformers"] == 3
+    assert prep["embedding"] == "ETKDGv3"
+    assert prep["optimization"] == "MMFF94"
+    assert prep["status"] == "completed"
+
+
+# ---------------------------------------------------------------------------
+# PDBQT generation (Meeko)
+# ---------------------------------------------------------------------------
+
+
+def test_generate_pdbqt_for_receptor(
+    client, project, sample_data: Path
+) -> None:
+    body = _import(client, project["id"], sample_data / "3PTB.pdb", kind="complex")
+    structure_id = body["structure"]["id"]
+
+    # First prepare the receptor with hydrogens.
+    prep = client.post(
+        f"/api/preparation/receptor/{structure_id}",
+        params={"keepWaters": False, "keepCofactors": False, "addHydrogens": True},
+    ).json()
+    receptor_id = prep["outputStructureId"]
+
+    response = client.post(f"/api/preparation/pdbqt/{receptor_id}")
+    assert response.status_code == 201, response.text
+    pdbqt = response.json()
+
+    assert pdbqt["structureId"] == receptor_id
+    assert pdbqt["path"].endswith(".pdbqt")
+    assert len(pdbqt["sha256"]) == 64
+    assert pdbqt["heavyAtoms"] > 0
+    assert pdbqt["pdbqtAtoms"] > 0
+
+
+def test_generate_pdbqt_for_ligand(
+    client, project, sample_data: Path
+) -> None:
+    body = _import(client, project["id"], sample_data / "benzamidine.sdf", kind="ligand")
+    structure_id = body["structure"]["id"]
+
+    # First prepare the ligand.
+    prep = client.post(
+        f"/api/preparation/ligand/{structure_id}",
+        params={"embed3d": True, "seed": 42, "optimize": True},
+    ).json()
+    ligand_id = prep["outputStructureId"]
+
+    response = client.post(f"/api/preparation/pdbqt/{ligand_id}")
+    assert response.status_code == 201, response.text
+    pdbqt = response.json()
+
+    assert pdbqt["structureId"] == ligand_id
+    assert pdbqt["path"].endswith(".pdbqt")
+    assert pdbqt["heavyAtoms"] > 0
+    assert pdbqt["pdbqtAtoms"] > 0
+
+
+# ---------------------------------------------------------------------------
+# End-to-end docking preparation
+# ---------------------------------------------------------------------------
+
+
+def test_prepare_for_docking_end_to_end(
+    client, project, sample_data: Path
+) -> None:
+    # Import complex (receptor) and ligand as separate structures.
+    complex_body = _import(client, project["id"], sample_data / "3PTB.pdb", kind="complex")
+    complex_id = complex_body["structure"]["id"]
+    ligand_body = _import(client, project["id"], sample_data / "benzamidine.sdf", kind="ligand")
+    ligand_id = ligand_body["structure"]["id"]
+
+    # Prepare the receptor first (needed so binding sites can be defined on it).
+    prep = client.post(
+        f"/api/preparation/receptor/{complex_id}",
+        params={"keepWaters": False, "keepCofactors": False, "addHydrogens": True},
+    ).json()
+    receptor_id = prep["outputStructureId"]
+
+    # Define a binding site on the prepared receptor.
+    site = client.post(
+        "/api/binding-sites",
+        json={
+            "projectId": project["id"],
+            "receptorStructureId": receptor_id,
+            "name": "Docking site",
+            "method": "manual",
+            "centerX": 10.0,
+            "centerY": 10.0,
+            "centerZ": 10.0,
+            "sizeX": 22.0,
+            "sizeY": 22.0,
+            "sizeZ": 22.0,
+        },
+    ).json()
+
+    # End-to-end docking prep starts from the ORIGINAL complex structure
+    # (re-prepares receptor from scratch) and the ligand.
+    response = client.post(
+        "/api/preparation/docking-prep",
+        json={
+            "receptorStructureId": complex_id,
+            "ligandStructureId": ligand_id,
+            "bindingSiteId": site["id"],
+            "addHydrogens": True,
+            "ligandMaxConformers": 2,
+        },
+    )
+    assert response.status_code == 201, response.text
+    result = response.json()
+
+    assert result["receptorPrepId"] is not None
+    assert result["receptorOutputStructureId"] is not None
+    assert result["receptorAtomsKept"] > 0
+    assert result["ligandPrepId"] is not None
+    assert result["ligandOutputStructureId"] is not None
+    assert result["ligandConformers"] == 2
+    assert result["receptorPdbqt"]["path"].endswith(".pdbqt")
+    assert result["receptorPdbqt"]["heavyAtoms"] > 0
+    assert result["ligandPdbqt"]["path"].endswith(".pdbqt")
+    assert result["ligandPdbqt"]["heavyAtoms"] > 0
+    assert result["bindingSite"] is not None
+    assert result["bindingSite"]["id"] == site["id"]

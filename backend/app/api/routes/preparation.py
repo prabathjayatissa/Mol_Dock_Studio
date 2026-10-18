@@ -1,22 +1,44 @@
-"""Preparation endpoints: receptor prep, ligand prep, binding-site definition."""
+"""Preparation endpoints: receptor prep, ligand prep, PDBQT generation,
+binding-site definition, and end-to-end docking preparation."""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Query, status
+from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.api.deps import DbSession, StoreDep
 from app.db.models import LigandPrep, ReceptorPrep, Structure
 from app.schemas.preparation import (
+    DockingPrepOut,
     LigandPrepOut,
+    PdbqtOut,
     ReceptorPrepOut,
 )
 from app.services.preparation import (
+    generate_pdbqt,
+    prepare_for_docking,
     prepare_ligand,
     prepare_receptor,
 )
 
 router = APIRouter(prefix="/preparation", tags=["preparation"])
+
+
+class DockingPrepRequest(BaseModel):
+    receptorStructureId: str
+    ligandStructureId: str
+    bindingSiteId: str | None = None
+    receptorName: str | None = None
+    ligandName: str | None = None
+    keepWaters: bool = False
+    keepCofactors: bool = False
+    keepChains: list[str] | None = None
+    addHydrogens: bool = True
+    ligandEmbed3d: bool = True
+    ligandSeed: int = 42
+    ligandOptimize: bool = True
+    ligandMaxConformers: int = 1
 
 
 def _project_of(session: DbSession, structure_id: str) -> str:
@@ -41,6 +63,7 @@ def prepare_receptor_route(
     keepWaters: bool = False,
     keepCofactors: bool = False,
     keepChains: list[str] | None = Query(default=None),
+    addHydrogens: bool = False,
     name: str | None = None,
 ) -> ReceptorPrepOut:
     project_id = _project_of(session, structure_id)
@@ -52,6 +75,7 @@ def prepare_receptor_route(
         keep_waters=keepWaters,
         keep_cofactors=keepCofactors,
         keep_chains=keepChains,
+        add_hydrogens=addHydrogens,
         store=store,
     )
     prep = outcome.receptor_prep
@@ -118,6 +142,88 @@ def prepare_ligand_route(
         config=prep.config or {},
         toolVersions=prep.tool_versions or {},
         createdAt=prep.created_at,
+    )
+
+
+@router.post(
+    "/pdbqt/{structure_id}",
+    response_model=PdbqtOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="Generate a PDBQT file from a prepared structure (Meeko)",
+)
+def generate_pdbqt_route(
+    structure_id: str,
+    session: DbSession,
+    store: StoreDep,
+) -> PdbqtOut:
+    project_id = _project_of(session, structure_id)
+    result = generate_pdbqt(
+        session,
+        project_id=project_id,
+        structure_id=structure_id,
+        store=store,
+    )
+    return PdbqtOut(
+        structureId=result["structureId"],
+        path=result["pdbqtPath"],
+        sha256=result["pdbqtSha256"],
+        heavyAtoms=result["heavyAtoms"],
+        pdbqtAtoms=result["pdbqtAtoms"],
+    )
+
+
+@router.post(
+    "/docking-prep",
+    response_model=DockingPrepOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="End-to-end Phase 2 preparation for docking (receptor + ligand + PDBQT)",
+)
+def prepare_for_docking_route(
+    payload: DockingPrepRequest,
+    session: DbSession,
+    store: StoreDep,
+) -> DockingPrepOut:
+    result = prepare_for_docking(
+        session,
+        project_id=_project_of(session, payload.receptorStructureId),
+        receptor_structure_id=payload.receptorStructureId,
+        ligand_structure_id=payload.ligandStructureId,
+        binding_site_id=payload.bindingSiteId,
+        receptor_name=payload.receptorName,
+        ligand_name=payload.ligandName,
+        keep_waters=payload.keepWaters,
+        keep_cofactors=payload.keepCofactors,
+        keep_chains=payload.keepChains,
+        add_hydrogens=payload.addHydrogens,
+        ligand_embed3d=payload.ligandEmbed3d,
+        ligand_seed=payload.ligandSeed,
+        ligand_optimize=payload.ligandOptimize,
+        ligand_max_conformers=payload.ligandMaxConformers,
+        store=store,
+    )
+    return DockingPrepOut(
+        receptorPrepId=result["receptorPrep"]["id"],
+        receptorOutputStructureId=result["receptorPrep"]["outputStructureId"],
+        receptorAtomsKept=result["receptorPrep"]["atomsKept"],
+        receptorAtomsRemoved=result["receptorPrep"]["atomsRemoved"],
+        ligandPrepId=result["ligandPrep"]["id"],
+        ligandOutputStructureId=result["ligandPrep"]["outputStructureId"],
+        ligandConformers=result["ligandPrep"]["conformers"],
+        receptorPdbqt=PdbqtOut(
+            structureId=payload.receptorStructureId,
+            path=result["receptorPdbqt"]["path"],
+            sha256=result["receptorPdbqt"]["sha256"],
+            heavyAtoms=result["receptorPdbqt"]["heavyAtoms"],
+            pdbqtAtoms=result["receptorPdbqt"]["pdbqtAtoms"],
+        ),
+        ligandPdbqt=PdbqtOut(
+            structureId=payload.ligandStructureId,
+            path=result["ligandPdbqt"]["path"],
+            sha256=result["ligandPdbqt"]["sha256"],
+            heavyAtoms=result["ligandPdbqt"]["heavyAtoms"],
+            pdbqtAtoms=result["ligandPdbqt"]["pdbqtAtoms"],
+        ),
+        bindingSite=result["bindingSite"],
     )
 
 
