@@ -210,12 +210,13 @@ def detect_capabilities(settings: Settings | None = None) -> list[Capability]:
                 key="docking",
                 label="Molecular docking (AutoDock Vina)",
                 category="feature",
-                status="not_implemented",
+                status="unavailable",
                 remediation=(
-                    "Docking is scheduled for Phase 3 and additionally requires AutoDock Vina, "
-                    "which has no macOS arm64 wheel."
+                    "AutoDock Vina is required for docking. Install it "
+                    "(linux/amd64 via Docker, or build from source) and set "
+                    "MOLDOCK_VINA_BINARY to its path."
                 ),
-                detail="Engine adapter and job submission arrive in Phase 3.",
+                detail="Engine adapter is implemented; Vina binary not found.",
             )
         )
     else:
@@ -224,9 +225,12 @@ def detect_capabilities(settings: Settings | None = None) -> list[Capability]:
                 key="docking",
                 label="Molecular docking (AutoDock Vina)",
                 category="feature",
-                status="not_implemented",
-                remediation="AutoDock Vina is present. The engine adapter is delivered in Phase 3.",
-                detail="Vina detected; Phase 3 wires it into the job queue.",
+                status="available",
+                version=vina_python.version or vina_cli.version,
+                path=vina_python.location or vina_cli.location,
+                mode="native",
+                remediation=None,
+                detail="Vina engine adapter and job queue are implemented.",
             )
         )
 

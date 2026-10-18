@@ -77,3 +77,9 @@ register_handler(
     description="Diagnostic: verify the background job pipeline (progress, cancel, timeout) works.",
     phase="phase-0",
 )
+register_handler(
+    "docking",
+    "app.services.jobs.handlers:docking_job",
+    description="Run AutoDock Vina docking: receptor + ligand + search box -> ranked poses.",
+    phase="phase-3",
+)

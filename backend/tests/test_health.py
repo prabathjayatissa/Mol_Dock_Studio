@@ -51,13 +51,13 @@ def test_missing_capabilities_carry_actionable_remediation(client) -> None:
             assert capability.get("remediation"), capability["key"]
 
 
-def test_docking_is_reported_as_not_implemented(client) -> None:
+def test_docking_is_reported_as_unavailable_without_vina(client) -> None:
     capabilities = {cap["key"]: cap for cap in client.get("/api/health").json()["capabilities"]}
     docking = capabilities["docking"]
-    # Phase 1 ships no docking engine, so the feature is honestly "not
-    # implemented" regardless of whether Vina happens to be installed.
-    assert docking["status"] == "not_implemented"
-    assert "Phase 3" in docking["remediation"]
+    # Docking engine adapter is implemented, but Vina binary is not installed
+    # on macOS arm64, so the feature is "unavailable" with remediation.
+    assert docking["status"] == "unavailable"
+    assert "Vina" in docking["remediation"]
 
 
 def test_roadmap_phases_are_reported(client) -> None:
