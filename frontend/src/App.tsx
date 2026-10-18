@@ -1,7 +1,13 @@
 import { useEffect } from "react";
 
 import { useSessionStore } from "./stores/sessionStore";
+import { ActionPanel } from "./components/ActionPanel";
+import { ColourPanel } from "./components/ColourPanel";
+import { HidePanel } from "./components/HidePanel";
+import { LabelPanel } from "./components/LabelPanel";
+import { MolecularBuilder } from "./components/MolecularBuilder";
 import { PropertiesPanel } from "./components/PropertiesPanel";
+import { ShowPanel } from "./components/ShowPanel";
 import { StatusBar } from "./components/StatusBar";
 import { StructurePanel } from "./components/StructurePanel";
 import { Toolbar } from "./components/Toolbar";
@@ -28,8 +34,12 @@ export default function App() {
     <div className="flex h-full flex-col bg-surface-0 text-gray-100">
       <header className="flex items-center gap-3 border-b border-border-subtle bg-surface-1 px-4 py-2.5">
         <div className="flex items-baseline gap-2">
-          <h1 className="text-sm font-semibold tracking-tight text-gray-50">MolDock Studio</h1>
-          <span className="text-[10px] uppercase tracking-widest text-accent">Phase 1 · viewer</span>
+          <h1 className="text-sm font-semibold tracking-tight text-gray-50">
+            MolDock Studio
+          </h1>
+          <span className="text-[10px] uppercase tracking-widest text-accent">
+            Phase 1 · viewer
+          </span>
         </div>
         <p className="hidden text-[11px] text-gray-500 md:block">
           Molecular visualisation and docking workbench — original implementation
@@ -44,9 +54,11 @@ export default function App() {
 
       <Toolbar />
 
-      <main className="grid min-h-0 flex-1 grid-cols-1 gap-2 p-2 lg:grid-cols-[300px_minmax(0,1fr)_320px]">
+      <main className="grid min-h-0 flex-1 grid-cols-1 gap-2 p-2 lg:grid-cols-[280px_minmax(0,1fr)_340px]">
         <div className="flex min-h-0 flex-col gap-2">
           <StructurePanel />
+          <HidePanel />
+          <ShowPanel />
         </div>
 
         <div className="min-h-0 overflow-hidden rounded-lg border border-border-subtle">
@@ -54,8 +66,12 @@ export default function App() {
         </div>
 
         <div className="flex min-h-0 flex-col gap-2">
+          <ColourPanel />
+          <LabelPanel />
+          <ActionPanel />
           <PropertiesPanel />
           <WorkflowPanel />
+          <MolecularBuilder />
         </div>
       </main>
 

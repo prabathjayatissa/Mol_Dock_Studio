@@ -1,11 +1,14 @@
 /**
  * Schematic cartoon ribbon.
  *
- * This is an original, honest approximation: a flat ribbon swept along a
- * Catmull–Rom spline through each chain's Cα trace, coloured by residue. It is
- * **not** a DSSP/MolScript-accurate cartoon with helix coils and sheet arrows;
- * that refinement is listed as pending in the roadmap. It is fast, robust to
- * missing backbone atoms, and good enough to read the fold.
+ * A tube swept along a Catmull–Rom spline through each chain's Cα trace,
+ * coloured by residue. Tube segments give a smooth, PyMOL-like cartoon with
+ * proper per-vertex normals for lighting, instead of the previous flat ribbon.
+ *
+ * This is an original, honest approximation: it is **not** a DSSP/MolScript
+ * accurate cartoon with helix coils and sheet arrows; that refinement is
+ * listed as pending in the roadmap. It is fast, robust to missing backbone
+ * atoms, and good enough to read the fold.
  */
 
 import * as THREE from "three";
@@ -20,7 +23,9 @@ export interface RibbonGeometry {
   indices: Uint32Array;
 }
 
-const SAMPLES_PER_RESIDUE = 6;
+const TUBE_RADIUS_SEGMENTS = 8;    // around the tube cross-section
+const TUBE_RADIUS = 0.45;          // tube radius in Å
+const SAMPLES_PER_RESIDUE = 12;    // along the spline; higher = smoother
 
 function caPosition(packet: StructurePacket, atomIndex: number): THREE.Vector3 {
   return new THREE.Vector3(
@@ -30,10 +35,49 @@ function caPosition(packet: StructurePacket, atomIndex: number): THREE.Vector3 {
   );
 }
 
+function buildTubeSegment(
+  positions: number[],
+  normals: number[],
+  colors: number[],
+  indices: number[],
+  point: THREE.Vector3,
+  normal: THREE.Vector3,
+  binormal: THREE.Vector3,
+  color: RGB,
+  prevBase: number | null,
+) {
+  // Ring vertices around the cross-section at this spline sample.
+  const ringStart = positions.length / 3;
+  for (let s = 0; s < TUBE_RADIUS_SEGMENTS; s += 1) {
+    const theta = (s / TUBE_RADIUS_SEGMENTS) * Math.PI * 2;
+    const offset = new THREE.Vector3()
+      .addScaledVector(normal, Math.cos(theta) * TUBE_RADIUS)
+      .addScaledVector(binormal, Math.sin(theta) * TUBE_RADIUS);
+    const vertex = point.clone().add(offset);
+    positions.push(vertex.x, vertex.y, vertex.z);
+    normals.push(offset.x, offset.y, offset.z);
+    const [r, g, b] = color;
+    colors.push(r, g, b);
+  }
+
+  // Quads between this ring and the previous ring.
+  if (prevBase !== null) {
+    for (let s = 0; s < TUBE_RADIUS_SEGMENTS; s += 1) {
+      const sNext = (s + 1) % TUBE_RADIUS_SEGMENTS;
+      const a = prevBase + s;
+      const b = prevBase + sNext;
+      const c = ringStart + sNext;
+      const d = ringStart + s;
+      indices.push(a, b, c, b, d, c);
+    }
+  }
+
+  return ringStart;
+}
+
 export function buildCartoon(
   packet: StructurePacket,
   colorFor: (residueIndex: number) => RGB,
-  width = 1.5,
 ): RibbonGeometry | null {
   // Group amino-acid residues that have a Cα by chain, preserving order.
   const byChain = new Map<number, PacketResidue[]>();
@@ -48,7 +92,6 @@ export function buildCartoon(
   const normals: number[] = [];
   const colors: number[] = [];
   const indices: number[] = [];
-  const half = width / 2;
 
   for (const residues of byChain.values()) {
     if (residues.length < 2) continue;
@@ -64,7 +107,7 @@ export function buildCartoon(
     });
 
     const sampleCount = (residues.length - 1) * SAMPLES_PER_RESIDUE + 1;
-    const baseVertex = positions.length / 3;
+    let prevRing: number | null = null;
 
     for (let s = 0; s < sampleCount; s += 1) {
       const t = sampleCount === 1 ? 0 : s / (sampleCount - 1);
@@ -79,29 +122,17 @@ export function buildCartoon(
       let ref = reference[residueIndex];
       if (Math.abs(ref.dot(tangent)) > 0.95) ref = new THREE.Vector3(0, 1, 0);
 
-      const side = new THREE.Vector3().crossVectors(tangent, ref);
-      if (side.lengthSq() < 1e-8) side.crossVectors(tangent, new THREE.Vector3(0, 0, 1));
-      side.normalize();
-      const faceNormal = new THREE.Vector3().crossVectors(side, tangent).normalize();
+      const normal = new THREE.Vector3().crossVectors(tangent, ref);
+      if (normal.lengthSq() < 1e-8) normal.crossVectors(tangent, new THREE.Vector3(0, 0, 1));
+      normal.normalize();
+      const binormal = new THREE.Vector3().crossVectors(tangent, normal);
 
-      const left = point.clone().addScaledVector(side, half);
-      const right = point.clone().addScaledVector(side, -half);
-
-      positions.push(left.x, left.y, left.z, right.x, right.y, right.z);
-      normals.push(
-        faceNormal.x, faceNormal.y, faceNormal.z,
-        faceNormal.x, faceNormal.y, faceNormal.z,
+      const color = colorFor(residue.index);
+      prevRing = buildTubeSegment(
+        positions, normals, colors, indices,
+        point, normal, binormal, color,
+        prevRing,
       );
-      const [r, g, b] = colorFor(residue.index);
-      colors.push(r, g, b, r, g, b);
-    }
-
-    for (let s = 0; s < sampleCount - 1; s += 1) {
-      const a = baseVertex + s * 2;
-      const b = a + 1;
-      const c = a + 2;
-      const d = a + 3;
-      indices.push(a, b, c, b, d, c);
     }
   }
 

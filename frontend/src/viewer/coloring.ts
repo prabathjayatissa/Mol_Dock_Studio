@@ -143,9 +143,18 @@ export function residueColor(context: ColoringContext, residueIndex: number): RG
 export function atomVisible(
   packet: StructurePacket,
   atomIndex: number,
-  opts: { showHydrogens: boolean; showWaters: boolean },
+  opts: {
+    showHydrogens: boolean;
+    showWaters: boolean;
+    hiddenChains: number[];
+    hiddenResidues: number[];
+  },
 ): boolean {
   if (!opts.showHydrogens && packet.atoms.element[atomIndex] === "H") return false;
   if (!opts.showWaters && packet.atoms.isWater[atomIndex]) return false;
+  const residueIndex = packet.atoms.residueIndex[atomIndex];
+  const residue = packet.residues[residueIndex];
+  if (residue && opts.hiddenResidues.includes(residueIndex)) return false;
+  if (residue && opts.hiddenChains.includes(residue.chainIndex)) return false;
   return true;
 }

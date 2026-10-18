@@ -19,6 +19,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
 import type { StructurePacket, SurfacePayload } from "../api/types";
 import type { ViewerDocument } from "../stores/viewerStore";
+import { atomLabel } from "../lib/measure";
 import { buildCartoon } from "./cartoon";
 import { buildColoringContext, residueColor, type ColoringContext } from "./coloring";
 import { pickAtom, rayFromNdc } from "./picking";
@@ -200,6 +201,8 @@ export class ViewerEngine {
     this.atomStyles = computeAtomStyles(this.packet, this.coloring, {
       showHydrogens: doc.showHydrogens,
       showWaters: doc.showWaters,
+      hiddenChains: doc.hiddenChains,
+      hiddenResidues: doc.hiddenResidues,
     }, doc.representation);
 
     this.rebuildAtoms();
@@ -461,11 +464,20 @@ export class ViewerEngine {
     this.clearGroup(this.labelGroup);
     if (!this.packet || !doc.showLabels) return;
     const entries: LabelEntry[] = [];
-    for (const residue of this.packet.residues) {
-      if (residue.isWater) continue;
-      if (!residue.isAminoAcid && !residue.isHetero) continue;
-      const anchor = residue.caIndex ?? residue.atomStart;
-      entries.push({ atomIndex: anchor, text: residue.label });
+    if (doc.labelMode === "selected") {
+      for (const atomIndex of doc.labelSelectedAtoms) {
+        const residueIndex = this.packet.atoms.residueIndex[atomIndex];
+        const residue = this.packet.residues[residueIndex];
+        const name = this.packet.atoms.name[atomIndex] ?? "?";
+        entries.push({ atomIndex, text: residue ? atomLabel(this.packet, atomIndex) : name });
+      }
+    } else {
+      for (const residue of this.packet.residues) {
+        if (residue.isWater) continue;
+        if (!residue.isAminoAcid && !residue.isHetero) continue;
+        const anchor = residue.caIndex ?? residue.atomStart;
+        entries.push({ atomIndex: anchor, text: residue.label });
+      }
     }
     // Cap label count; hundreds of sprites would dominate the frame.
     for (const entry of entries.slice(0, 220)) {

@@ -26,6 +26,8 @@ export type ColorScheme =
 
 export type SurfaceMode = "vdw" | "sas";
 
+export type LabelMode = "none" | "residue" | "selected";
+
 export interface Measurement {
   id: string;
   kind: "distance" | "angle";
@@ -43,6 +45,10 @@ export interface ViewerDocument {
   surfaceMode: SurfaceMode;
   surfaceOpacity: number;
   showLabels: boolean;
+  labelMode: LabelMode;
+  hiddenChains: number[];
+  hiddenResidues: number[];
+  labelSelectedAtoms: number[];
   background: "dark" | "light";
   measurements: Measurement[];
 }
@@ -56,6 +62,10 @@ const DEFAULT_DOCUMENT: ViewerDocument = {
   surfaceMode: "sas",
   surfaceOpacity: 0.35,
   showLabels: false,
+  labelMode: "residue",
+  hiddenChains: [],
+  hiddenResidues: [],
+  labelSelectedAtoms: [],
   background: "dark",
   measurements: [],
 };
@@ -76,7 +86,15 @@ interface ViewerState extends ViewerDocument {
   setSurfaceMode: (value: SurfaceMode) => void;
   setSurfaceOpacity: (value: number) => void;
   setShowLabels: (value: boolean) => void;
+  setLabelMode: (mode: LabelMode) => void;
   setBackground: (value: "dark" | "light") => void;
+  hideChain: (chainIndex: number) => void;
+  showChain: (chainIndex: number) => void;
+  hideResidue: (residueIndex: number) => void;
+  showResidue: (residueIndex: number) => void;
+  showAll: () => void;
+  labelAtom: (atomIndex: number) => void;
+  clearLabels: () => void;
   addMeasurement: (measurement: Omit<Measurement, "id">) => void;
   removeMeasurement: (id: string) => void;
   clearMeasurements: () => void;
@@ -97,6 +115,10 @@ function snapshot(state: ViewerState): ViewerDocument {
     surfaceMode: state.surfaceMode,
     surfaceOpacity: state.surfaceOpacity,
     showLabels: state.showLabels,
+    labelMode: state.labelMode,
+    hiddenChains: state.hiddenChains,
+    hiddenResidues: state.hiddenResidues,
+    labelSelectedAtoms: state.labelSelectedAtoms,
     background: state.background,
     measurements: state.measurements,
   };
@@ -130,7 +152,44 @@ export const useViewerStore = create<ViewerState>()((set, get) => ({
   setSurfaceMode: (value) => edit(set, get, { surfaceMode: value }),
   setSurfaceOpacity: (value) => set({ surfaceOpacity: Math.min(1, Math.max(0, value)) }),
   setShowLabels: (value) => edit(set, get, { showLabels: value }),
+  setLabelMode: (mode) => edit(set, get, { labelMode: mode }),
   setBackground: (value) => edit(set, get, { background: value }),
+
+  hideChain: (chainIndex: number) => {
+    const state = get();
+    if (state.hiddenChains.includes(chainIndex)) return;
+    edit(set, get, { hiddenChains: [...state.hiddenChains, chainIndex] });
+  },
+
+  showChain: (chainIndex: number) => {
+    const state = get();
+    edit(set, get, { hiddenChains: state.hiddenChains.filter((c) => c !== chainIndex) });
+  },
+
+  hideResidue: (residueIndex: number) => {
+    const state = get();
+    if (state.hiddenResidues.includes(residueIndex)) return;
+    edit(set, get, { hiddenResidues: [...state.hiddenResidues, residueIndex] });
+  },
+
+  showResidue: (residueIndex: number) => {
+    const state = get();
+    edit(set, get, { hiddenResidues: state.hiddenResidues.filter((r) => r !== residueIndex) });
+  },
+
+  showAll: () => edit(set, get, { hiddenChains: [], hiddenResidues: [] }),
+
+  labelAtom: (atomIndex: number) => {
+    const state = get();
+    if (state.labelSelectedAtoms.includes(atomIndex)) return;
+    edit(set, get, {
+      labelSelectedAtoms: [...state.labelSelectedAtoms, atomIndex],
+      showLabels: true,
+      labelMode: "selected",
+    });
+  },
+
+  clearLabels: () => edit(set, get, { labelSelectedAtoms: [], showLabels: false }),
 
   addMeasurement: (measurement) =>
     edit(set, get, {

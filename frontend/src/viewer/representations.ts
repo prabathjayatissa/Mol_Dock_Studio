@@ -38,6 +38,8 @@ export interface BondPlan {
 export interface VisibilityOptions {
   showHydrogens: boolean;
   showWaters: boolean;
+  hiddenChains: number[];
+  hiddenResidues: number[];
 }
 
 type PolymerMode = "none" | "vanDerWaals" | "ball" | "stick" | "tiny";
@@ -96,7 +98,12 @@ export function computeAtomStyles(
     colors[i * 3 + 1] = g;
     colors[i * 3 + 2] = b;
 
-    if (!atomVisible(packet, i, visibility)) continue;
+    if (!atomVisible(packet, i, {
+      showHydrogens: visibility.showHydrogens,
+      showWaters: visibility.showWaters,
+      hiddenChains: visibility.hiddenChains,
+      hiddenResidues: visibility.hiddenResidues,
+    })) continue;
     visible[i] = 1;
 
     const vdw = packet.atoms.radius[i] || 1.5;
